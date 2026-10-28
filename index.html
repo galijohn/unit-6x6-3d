@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>יחידת דיור 6×6 – תלת מימד</title>
+<style>
+  :root { --ink:#1d2a33; --muted:#5b6b75; --accent:#0F5E7A; --bg:#eef2f4; }
+  html, body { margin:0; height:100%; background:var(--bg); font-family: Arial, "Segoe UI", sans-serif; color:var(--ink); overflow:hidden; }
+  #c { position:fixed; inset:0; }
+  .hud { position:fixed; top:16px; right:20px; pointer-events:none; }
+  .hud h1 { margin:0; font-size:20px; font-weight:700; }
+  .hud p { margin:4px 0 0; font-size:13px; color:var(--muted); }
+  .ctl { position:fixed; bottom:38px; right:20px; display:flex; gap:18px; }
+  .ctl button { background:none; border:none; padding:4px 0; font:inherit; font-size:14px; color:var(--accent); cursor:pointer; border-bottom:2px solid transparent; }
+  .ctl button.on { border-bottom-color:var(--accent); font-weight:700; }
+  .sig { position:fixed; bottom:12px; right:20px; font-size:12px; color:var(--muted); }
+  .legend { position:fixed; bottom:18px; left:20px; font-size:12px; color:var(--muted); line-height:1.6; text-align:left; direction:rtl; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="hud">
+  <h1>יחידת דיור 6×6 מ׳</h1>
+  <p>טיוטה 13 · גרירה לסיבוב · גלגלת לזום · מידות להמחשה, לא לביצוע</p>
+</div>
+<div class="ctl">
+  <button id="bRot" class="on">סיבוב אוטומטי</button>
+  <button id="bWalls">קירות נמוכים</button>
+  <button id="bTop">מבט מלמעלה</button>
+</div>
+<div class="sig">תוכנן ועוצב על ידי John Levy</div>
+<div class="legend">צפון: פתח הכניסה · מערב: קיר הבית<br>דרום: גדר השכנים · מזרח: גדר</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// Plan units: cm. x = east from the house wall (0..600), y = south from the north face (0..600), h = height.
+const S = 0.01;
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xeef2f4);
+
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+camera.position.set(9.5, 8.5, 9.5);
+const controls = new OrbitControls(camera, canvas);
+controls.target.set(3, 0.8, 3);
+controls.enableDamping = true;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.8;
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0xb0b8bc, 0.9));
+const sun = new THREE.DirectionalLight(0xffffff, 1.1);
+sun.position.set(6, 12, 2);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -2, right: 9, top: 9, bottom: -3 });
+scene.add(sun);
+
+const M = (c, o = {}) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.8, ...o });
+const mat = {
+  floor: M(0xd9d2c5), wall: M(0xf4f4f2), house: M(0xb9b5ad), part: M(0xe6e6e3),
+  wood: M(0xc8a27a), white: M(0xfafafa), dark: M(0x2b2f33), top: M(0x8d8f8c),
+  fabric: M(0x6f8796), bed: M(0xe9e4da), pillow: M(0xffffff), steel: M(0xc9ced2, { metalness: 0.4, roughness: 0.4 }),
+  glass: M(0x9fd3e6, { transparent: true, opacity: 0.35, roughness: 0.1 }),
+  blue: M(0xdde8f2), ac: M(0xffffff), tv: M(0x111111)
+};
+
+const walls = [], highs = [];
+function box(x1, y1, h1, x2, y2, h2, m, isWall = false) {
+  const g = new THREE.BoxGeometry((x2 - x1) * S, (h2 - h1) * S, (y2 - y1) * S);
+  const mesh = new THREE.Mesh(g, m);
+  mesh.position.set((x1 + x2) / 2 * S, (h1 + h2) / 2 * S, (y1 + y2) / 2 * S);
+  mesh.castShadow = true; mesh.receiveShadow = true;
+  if (isWall) { mesh.userData.h1 = h1; mesh.userData.h2 = h2; walls.push(mesh); }
+  else if (h1 >= 120) highs.push(mesh);
+  scene.add(mesh);
+  return mesh;
+}
+// wall along x (north/south): openings [[a,b,hLow,hHigh],...]
+function wallX(y1, y2, xa, xb, H, openings, m) {
+  const cuts = [xa, ...openings.flatMap(o => [o[0], o[1]]), xb];
+  for (let i = 0; i < cuts.length; i += 2) if (cuts[i + 1] > cuts[i]) box(cuts[i], y1, 0, cuts[i + 1], y2, H, m, true);
+  for (const [a, b, lo, hi] of openings) {
+    if (lo > 0) box(a, y1, 0, b, y2, lo, m, true);
+    if (hi < H) box(a, y1, hi, b, y2, H, m, true);
+    if (lo > 0) box(a, y1 + 3, lo, b, y2 - 3, hi, mat.glass);
+  }
+}
+function wallY(x1, x2, ya, yb, H, openings, m) {
+  const cuts = [ya, ...openings.flatMap(o => [o[0], o[1]]), yb];
+  for (let i = 0; i < cuts.length; i += 2) if (cuts[i + 1] > cuts[i]) box(x1, cuts[i], 0, x2, cuts[i + 1], H, m, true);
+  for (const [a, b, lo, hi] of openings) {
+    if (lo > 0) box(x1, a, 0, x2, b, lo, m, true);
+    if (hi < H) box(x1, a, hi, x2, b, H, m, true);
+    if (lo > 0) box(x1 + 3, a, lo, x2 - 3, b, hi, mat.glass);
+  }
+}
+
+const H = 250;
+// floor slab
+box(-30, -20, -15, 630, 620, 0, M(0xa9a49a));
+box(0, 10, 0, 590, 590, 1, mat.floor);
+// house wall (west)
+wallY(-30, 0, -20, 620, 340, [], mat.house);
+// transparent roof of the unit, 250..262
+const roof = box(0, 0, 250, 600, 600, 262, M(0x9fb8c4, { transparent: true, opacity: 0.18, depthWrite: false }));
+const roofEdge = new THREE.LineSegments(new THREE.EdgesGeometry(roof.geometry), new THREE.LineBasicMaterial({ color: 0x5b6b75 }));
+roofEdge.position.copy(roof.position); scene.add(roofEdge); highs.push(roofEdge);
+// north: entrance opening 240 (100..340), height 210
+wallX(0, 10, 0, 600, H, [[100, 340, 0, 210]], mat.wall);
+// east: strip windows over the sink (80..210) and in the shower (480..580), sill 190, top 230
+wallY(590, 600, 0, 600, H, [[80, 210, 190, 230], [480, 580, 190, 230]], mat.wall);
+// south: strip window 40..300
+wallX(590, 600, 0, 600, H, [[40, 300, 190, 230]], mat.wall);
+// bathroom partitions: north (door 390..470), west
+wallX(360, 370, 380, 590, H, [[390, 470, 0, 210]], mat.part);
+wallY(380, 390, 370, 590, H, [], mat.part);
+// sliding door inside the bathroom (open position)
+box(468, 371, 2, 538, 378, 208, mat.wood);
+
+// ---------- kitchen ----------
+box(530, 10, 0, 590, 224, 86, mat.white); box(528, 10, 86, 590, 224, 90, mat.top);
+box(345, 10, 0, 530, 70, 86, mat.white); box(345, 8, 86, 530, 72, 90, mat.top);
+box(540, 92, 85, 580, 144, 91, mat.steel);              // sink
+box(540, 18, 90, 585, 53, 120, mat.dark);                // microwave
+box(422, 15, 90, 478, 65, 91.5, mat.dark);              // cooktop
+box(422, 68, 10, 478, 71, 80, mat.dark);                // oven door
+box(345, 10, 145, 590, 45, 248, mat.white);             // uppers to the ceiling
+box(422, 9, 145, 478, 47, 152, mat.steel);              // integrated hood, bottom 145
+
+
+box(525, 224, 0, 590, 284, 185, mat.steel);             // fridge 60
+box(525, 224, 190, 590, 355, 248, mat.white);           // one flap cabinet over fridge + laundry
+box(525, 295, 0, 590, 355, 85, mat.white);              // washer
+box(525, 295, 87, 590, 355, 172, mat.white);            // dryer
+
+const porthole = (h) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.02, 32), mat.dark); m.rotation.z = Math.PI / 2; m.position.set(5.24, h * S, 3.25); scene.add(m); };
+porthole(45); porthole(130);
+
+// ---------- bathroom ----------
+box(400, 540, 0, 480, 590, 85, mat.wood);               // vanity on the south wall
+box(405, 588, 120, 475, 590, 185, M(0xcfe3ee, { metalness: 0.6, roughness: 0.1 })); // mirror
+box(575, 405, 0, 590, 445, 80, mat.white);              // WC tank on the east wall
+const wc = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.17, 0.4, 24), mat.white);
+wc.position.set(5.48, 0.2, 4.25); wc.scale.x = 1.4; scene.add(wc);
+box(500, 470, 0, 590, 590, 4, mat.blue);                // shower tray
+box(498, 530, 4, 501, 590, 200, mat.glass);             // glass west (entry 470..530)
+box(500, 468, 4, 590, 471, 200, mat.glass);             // glass between shower and WC
+
+// ---------- living ----------
+box(0, 120, 75, 5, 243, 145, mat.tv);                   // TV
+box(0, 100, 25, 35, 260, 60, mat.wood);                 // floating TV sideboard
+box(190, 80, 0, 280, 280, 42, mat.fabric);              // sofa seat
+box(255, 80, 42, 280, 280, 85, mat.fabric);             // sofa back
+box(190, 80, 42, 255, 95, 62, mat.fabric); box(190, 265, 42, 255, 280, 62, mat.fabric);
+box(105, 130, 0, 155, 230, 40, mat.wood);               // coffee table
+box(5, 10, 215, 95, 30, 245, mat.ac);                   // AC
+box(20, 10, 140, 80, 18, 200, M(0x8a8f94));              // electric panel 140..200
+const boiler = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 1.0, 24), M(0xf0f0f0));
+boiler.rotation.x = Math.PI / 2; boiler.position.set(0.26, 2.95, 4.6); scene.add(boiler); highs.push(boiler);
+box(0, 420, 268, 30, 426, 290, mat.dark); box(0, 494, 268, 30, 500, 290, mat.dark);   // wall brackets above the roof
+highs.push(label("דוד – מעל הגג, בחוץ", 60, 460, 335));
+
+// ---------- sleeping ----------
+box(0, 355, 0, 200, 515, 30, mat.wood);                 // bed base
+box(2, 357, 30, 198, 513, 52, mat.bed);                 // mattress
+box(0, 355, 0, 6, 515, 100, mat.wood);                  // headboard
+box(10, 367, 52, 45, 430, 62, mat.pillow); box(10, 440, 52, 45, 503, 62, mat.pillow);
+box(0, 310, 0, 40, 350, 50, mat.white); box(0, 520, 0, 40, 560, 50, mat.white);
+box(390, 440, 0, 402, 500, 60, M(0xf0a050));              // water manifold cabinet on the slab
+box(320, 370, 0, 380, 590, 230, mat.wood);              // wardrobe 220
+box(318, 479, 60, 320, 481, 200, mat.dark);             // wardrobe door line
+
+// ---------- labels ----------
+function label(text, x, y, h) {
+  const cv = document.createElement('canvas'); cv.width = 512; cv.height = 128;
+  const g = cv.getContext('2d'); g.font = 'bold 60px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.direction = 'rtl';
+  g.lineWidth = 10; g.strokeStyle = 'rgba(255,255,255,0.9)'; g.strokeText(text, 256, 64);
+  g.fillStyle = '#1d2a33'; g.fillText(text, 256, 64);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv), depthTest: true, transparent: true }));
+  sp.scale.set(1.6, 0.4, 1); sp.position.set(x * S, h * S, y * S); sp.renderOrder = 10; scene.add(sp);
+  return sp;
+}
+const labels = [
+  label('סלון', 130, 200, 160), label('שינה', 100, 450, 140), label('מטבחון', 440, 130, 170),
+  label('חדר רחצה', 480, 480, 260), label('ארון 220', 350, 480, 250), label('כניסה', 220, -40, 230)
+];
+
+// ---------- UI ----------
+const bRot = document.getElementById('bRot'), bWalls = document.getElementById('bWalls'), bTop = document.getElementById('bTop');
+bRot.onclick = () => { controls.autoRotate = !controls.autoRotate; bRot.classList.toggle('on', controls.autoRotate); };
+let low = false;
+bWalls.onclick = () => {
+  low = !low; bWalls.classList.toggle('on', low);
+  for (const w of walls) {
+    const top = low ? Math.min(w.userData.h2, 120) : w.userData.h2;
+    const hidden = w.userData.h1 >= top;
+    w.visible = !hidden;
+    if (!hidden) { const hh = (top - w.userData.h1) * S; w.scale.y = hh / ((w.userData.h2 - w.userData.h1) * S); w.position.y = w.userData.h1 * S + hh / 2; }
+  }
+  for (const m of highs) m.visible = !low;
+};
+let top = false;
+bTop.onclick = () => {
+  top = !top; bTop.classList.toggle('on', top);
+  if (top) { controls.autoRotate = false; bRot.classList.remove('on'); camera.position.set(3, 11, 3.01); }
+  else camera.position.set(9.5, 8.5, 9.5);
+  controls.target.set(3, 0.8, 3);
+};
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize); resize();
+const q = location.search;
+if (!q.includes('full')) bWalls.click();
+if (q.includes('west')) camera.position.set(-6, 6, 7);
+if (q.includes('north')) camera.position.set(3, 6, -7);
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+</script>
+</body>
+</html>
